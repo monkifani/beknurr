@@ -36,9 +36,10 @@ if not TOKEN:
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY не задан!")
 
+
 DATA_DIR = Path("/var/data")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "bot.db"
+
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 bot = Bot(token=TOKEN)
