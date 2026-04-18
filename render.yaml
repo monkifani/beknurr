@@ -11,5 +11,6 @@ services:
         sync: false
     disk:
       name: salesai-db
-      mountPath: /app/data
+     
+  mountPath: /var/data
       sizeGB: 1
