@@ -9,8 +9,7 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-    disk:
-      name: salesai-db
-     
-  mountPath: /var/data
-      sizeGB: 1
+  disk:
+  name: salesai-db
+  mountPath: /var/data  # <-- не /app/data
+  sizeGB: 1
