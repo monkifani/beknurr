@@ -9,7 +9,4 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-  disk:
-  name: salesai-db
-  mountPath: /var/data  # <-- не /app/data
-  sizeGB: 1
+    # ДИСК НЕ НУЖЕН - база в локальной папке
