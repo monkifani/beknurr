@@ -52,6 +52,11 @@ MAX_STEPS = 6
 # ============================================================
 
 async def init_db():
+     try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        logger.error(f"Нет прав на {DATA_DIR}. Проверь mountPath в render.yaml")
+        raise
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
