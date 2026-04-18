@@ -36,7 +36,7 @@ if not TOKEN:
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY не задан!")
 
-DATA_DIR = Path("/app/data")
+DATA_DIR = Path("/var/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "bot.db"
 
