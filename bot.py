@@ -2,15 +2,15 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
-from config import TOKEN, WEBHOOK_URL, engine
-from models import Base
-import handlers.start  # импортируем для регистрации хендлеров
+from config import TOKEN, WEBHOOK_URL, engine, Base
+from handlers import start, join
+
+# Регистрация роутеров
+dp = Dispatcher()
+dp.include_router(start.router)
+dp.include_router(join.router)
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
-
-# Регистрируем роутеры
-dp.include_router(handlers.start.router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
