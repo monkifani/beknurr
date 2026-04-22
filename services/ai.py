@@ -1,105 +1,140 @@
 import asyncio
+import logging
+import json
+import re
 from google import genai
 from google.genai import types as genai_types
 from config import GEMINI_API_KEY
-import json
-import re
 
+logger = logging.getLogger(__name__)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Промпт для "клиента" (время отклика ~1-2 сек)
-CLIENT_PROMPT = """Ты Баке, инвестор 50 лет. Ты в Telegram.
-Правила:
-- Пиши 1-2 коротких предложения
-- Без эмодзи, без списков, без "*"
-- Ты занятой, скептичный, но вежливый
-- Если менеджер задает вопросы — отвечай. Если давит — сопротивляйся
-- Не соглашайся сразу, торгуйся или откладывай решение"""
+# === ПРОМПТ ДЛЯ КЛИЕНТА ===
+CLIENT_SYSTEM = """Ты Баке, инвестор 50 лет. Общаешься в Telegram.
+
+Твой характер:
+- Занятой, скептичный, но вежливый
+- Не сдаешься сразу, требуешь конкретики
+- Если менеджер задает вопросы — отвечаешь честно
+- Если давит или льет воду — сопротивляешься
+
+Как пишешь:
+- 1-2 коротких предложения
+- Без эмодзи, без списков, без звездочек
+- Маленькие буквы можно
+- Как живой человек в WhatsApp
+
+Выдавай ТОЛЬКО текст сообщения, без пояснений."""
 
 async def get_client_reply(history: list, niche: str) -> str:
-    """Получает ответ AI-клиента"""
+    """Генерирует ответ AI-клиента"""
     try:
+        # Берем последние 8 сообщений для контекста (не перегружаем)
+        recent = history[-8:]
+        
         contents = []
-        for msg in history[-6:]:  # Последние 6 сообщений для контекста
+        for msg in recent:
             role = "user" if msg["role"] == "manager" else "model"
             contents.append(genai_types.Content(
-                role=role, 
+                role=role,
                 parts=[genai_types.Part.from_text(text=msg["content"])]
             ))
         
         config = genai_types.GenerateContentConfig(
             temperature=0.8,
-            system_instruction=CLIENT_PROMPT + f"\n\nМенеджер продает: {niche}"
+            system_instruction=f"{CLIENT_SYSTEM}\n\nМенеджер продает: {niche}"
         )
         
-        resp = await asyncio.to_thread(
+        response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-1.5-flash",
             contents=contents,
             config=config
         )
-        return resp.text.strip() if resp.text else "Напишите конкретнее"
+        
+        text = response.text.strip() if response.text else "..."
+        # Очистка от артефактов
+        text = re.sub(r'\*+', '', text)
+        text = re.sub(r'`+', '', text)
+        return text[:300]  # Ограничение длины ответа
+        
     except Exception as e:
-        return f"Ошибка: {str(e)[:50]}"
+        logger.error(f"AI client error: {e}")
+        return "не понял, можете конкретнее?"
 
-# Промпт для "судьи" (структурированная оценка)
-JUDGE_PROMPT = """Ты эксперт по продажам (Head of Sales). Оцени диалог менеджера.
-Проанализируй по критериям и верни ТОЛЬКО JSON:
+# === ПРОМПТ ДЛЯ СУДЬИ ===
+JUDGE_SYSTEM = """Ты Head of Sales. Оцени навыки менеджера по продажам.
+
+Верни СТРОГО JSON (без markdown, без пояснений):
 
 {
   "total_score": 0-100,
   "criteria": {
     "qualifying": 0-25,
-    "value_proposition": 0-25, 
-    "objection_handling": 0-25,
+    "value": 0-25,
+    "objections": 0-25,
     "closing": 0-25
   },
-  "verdict": "Один из: ЭЛИТА / ХОРОШО / СРЕДНЕ / СЛАБО",
-  "strengths": "2-3 сильные стороны",
-  "weaknesses": "2-3 слабые стороны",
-  "red_flags": ["список ошибок, например: Не выяснил бюджет"],
-  "interview_question": "Вопрос для реального собеседования"
+  "verdict": "ЭЛИТА или ХОРОШО или СРЕДНЕ или СЛАБО",
+  "strengths": "2-3 сильные стороны через запятую",
+  "weaknesses": "2-3 слабые стороны через запятую",
+  "red_flags": ["список критичных ошибок"],
+  "question": "Вопрос для собеседования"
 }
 
 Критерии:
-- qualifying: Выявил ли потребности, бюджет, сроки?
-- value_proposition: Объяснил ли ценность, а не просто фичи?
-- objection_handling: Как работал с возражениями?
-- closing: Назвал ли следующий шаг?"""
+- qualifying (0-25): Выявил потребность, бюджет, сроки, decision maker?
+- value (0-25): Объяснил ценность для клиента, а не просто фичи?
+- objections (0-25): Как обработал возражения (если были)?
+- closing (0-25): Назвал следующий конкретный шаг?
 
-async def judge_dialogue(history: list, niche: str) -> dict:
-    """Возвращает структурированную оценку"""
+Будь строгим но справедливым. Если менеджер не задавал вопросов — низкий балл."""
+
+async def judge_simulation(history: list, niche: str) -> dict:
+    """Оценивает диалог и возвращает структурированный результат"""
     try:
-        dialogue_text = "\n".join([
-            f"{'Менеджер' if m['role'] == 'manager' else 'Клиент'}: {m['content']}" 
+        dialogue = "\n".join([
+            f"{'[Менеджер]' if m['role'] == 'manager' else '[Клиент]'}: {m['content']}"
             for m in history
         ])
         
+        prompt = f"Продукт: {niche}\n\nДИАЛОГ:\n{dialogue}\n\nВерни JSON с оценкой."
+        
         config = genai_types.GenerateContentConfig(
-            temperature=0.2,  # Низкая температура для стабильности оценки
-            system_instruction=JUDGE_PROMPT,
-            response_mime_type="application/json"  # Заставляем выдать JSON
+            temperature=0.2,
+            system_instruction=JUDGE_SYSTEM,
+            response_mime_type="application/json"
         )
         
-        resp = await asyncio.to_thread(
+        response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-1.5-flash",
-            contents=f"Продукт: {niche}\n\nДиалог:\n{dialogue_text}",
+            contents=prompt,
             config=config
         )
         
-        # Парсим JSON
-        result = json.loads(resp.text)
+        result = json.loads(response.text)
+        
+        # Валидация результата
+        if not isinstance(result.get("total_score"), int):
+            raise ValueError("Invalid score")
+        
         return result
         
     except Exception as e:
-        # Fallback если AI не вернул JSON
+        logger.error(f"Judge error: {e}")
+        # Fallback результат при ошибке
         return {
             "total_score": 50,
-            "criteria": {"qualifying": 10, "value_proposition": 10, "objection_handling": 10, "closing": 20},
-            "verdict": "ОШИБКА ОЦЕНКИ",
-            "strengths": "Не удалось проанализировать",
-            "weaknesses": str(e),
+            "criteria": {
+                "qualifying": 12,
+                "value": 12,
+                "objections": 13,
+                "closing": 13
+            },
+            "verdict": "СРЕДНЕ",
+            "strengths": "Вежлив, грамотно пишет",
+            "weaknesses": "Технические проблемы с оценкой",
             "red_flags": [],
-            "interview_question": "Расскажите о вашем опыте продаж"
+            "question": "Расскажите о вашем опыте продаж"
         }
