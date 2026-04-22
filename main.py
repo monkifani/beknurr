@@ -3,12 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from config import TOKEN, WEBHOOK_URL, engine, Base
-from handlers import start, join
+from handlers import start, join, sim  # <-- добавили sim
 
 # Регистрация роутеров
 dp = Dispatcher()
 dp.include_router(start.router)
 dp.include_router(join.router)
+dp.include_router(sim.router)  # <-- добавили
 
 bot = Bot(token=TOKEN)
 
