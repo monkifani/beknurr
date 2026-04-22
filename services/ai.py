@@ -9,36 +9,48 @@ from config import GEMINI_API_KEY
 logger = logging.getLogger(__name__)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# === ПРОМПТ ДЛЯ КЛИЕНТА ===
 CLIENT_SYSTEM = """Ты Баке, инвестор 50 лет. Общаешься в Telegram.
-
-Твой характер:
-- Занятой, скептичный, но вежливый
-- Не сдаешься сразу, требуешь конкретики
-- Если менеджер задает вопросы — отвечаешь честно
-- Если давит или льет воду — сопротивляешься
-
-Как пишешь:
-- 1-2 коротких предложения
-- Без эмодзи, без списков, без звездочек
-- Маленькие буквы можно
-- Как живой человек в WhatsApp
-
-Выдавай ТОЛЬКО текст сообщения, без пояснений."""
+Характер: занятой, скептичный, но вежливый. Требуешь конкретики.
+Если менеджер задает вопросы — отвечаешь честно.
+Если давит или льет воду — сопротивляешься.
+Пиши: 1-2 коротких предложения, без эмодзи, без списков, без звездочек.
+Выдавай ТОЛЬКО текст сообщения."""
 
 async def get_client_reply(history: list, niche: str) -> str:
-    """Генерирует ответ AI-клиента"""
     try:
-        # Берем последние 8 сообщений для контекста (не перегружаем)
-        recent = history[-8:]
-        
         contents = []
-        for msg in recent:
+        
+        for msg in history[-8:]:
+            # manager -> user, client -> model
             role = "user" if msg["role"] == "manager" else "model"
+            text = msg["content"]
+            
+            # Пропускаем системные сообщения
+            if msg["role"] == "system":
+                continue
+                
             contents.append(genai_types.Content(
                 role=role,
-                parts=[genai_types.Part.from_text(text=msg["content"])]
+                parts=[genai_types.Part.from_text(text=text)]
             ))
+        
+        # Gemini требует чтобы первым было user сообщение
+        # Если история пустая или начинается с model — добавляем затравку
+        if not contents or contents[0].role == "model":
+            contents.insert(0, genai_types.Content(
+                role="user",
+                parts=[genai_types.Part.from_text(
+                    text=f"Менеджер хочет предложить вам: {niche}"
+                )]
+            ))
+        
+        # Убираем дублирующиеся роли подряд
+        filtered = []
+        for c in contents:
+            if filtered and filtered[-1].role == c.role:
+                # Если подряд одинаковые роли — пропускаем
+                continue
+            filtered.append(c)
         
         config = genai_types.GenerateContentConfig(
             temperature=0.8,
@@ -48,21 +60,23 @@ async def get_client_reply(history: list, niche: str) -> str:
         response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-1.5-flash",
-            contents=contents,
+            contents=filtered,
             config=config
         )
         
-        text = response.text.strip() if response.text else "..."
-        # Очистка от артефактов
+        if not response.text:
+            return "и что вы хотите предложить конкретно?"
+            
+        text = response.text.strip()
         text = re.sub(r'\*+', '', text)
         text = re.sub(r'`+', '', text)
-        return text[:300]  # Ограничение длины ответа
+        return text[:300]
         
     except Exception as e:
-        logger.error(f"AI client error: {e}")
-        return "не понял, можете конкретнее?"
+        logger.error(f"AI client error: {e}", exc_info=True)
+        return "и что вы хотите предложить конкретно?"
 
-# === ПРОМПТ ДЛЯ СУДЬИ ===
+
 JUDGE_SYSTEM = """Ты Head of Sales. Оцени навыки менеджера по продажам.
 
 Верни СТРОГО JSON (без markdown, без пояснений):
@@ -88,14 +102,14 @@ JUDGE_SYSTEM = """Ты Head of Sales. Оцени навыки менеджера
 - objections (0-25): Как обработал возражения (если были)?
 - closing (0-25): Назвал следующий конкретный шаг?
 
-Будь строгим но справедливым. Если менеджер не задавал вопросов — низкий балл."""
+Будь строгим но справедливым."""
 
 async def judge_simulation(history: list, niche: str) -> dict:
-    """Оценивает диалог и возвращает структурированный результат"""
     try:
         dialogue = "\n".join([
             f"{'[Менеджер]' if m['role'] == 'manager' else '[Клиент]'}: {m['content']}"
             for m in history
+            if m["role"] != "system"
         ])
         
         prompt = f"Продукт: {niche}\n\nДИАЛОГ:\n{dialogue}\n\nВерни JSON с оценкой."
@@ -115,26 +129,19 @@ async def judge_simulation(history: list, niche: str) -> dict:
         
         result = json.loads(response.text)
         
-        # Валидация результата
         if not isinstance(result.get("total_score"), int):
             raise ValueError("Invalid score")
-        
+            
         return result
         
     except Exception as e:
-        logger.error(f"Judge error: {e}")
-        # Fallback результат при ошибке
+        logger.error(f"Judge error: {e}", exc_info=True)
         return {
             "total_score": 50,
-            "criteria": {
-                "qualifying": 12,
-                "value": 12,
-                "objections": 13,
-                "closing": 13
-            },
+            "criteria": {"qualifying": 12, "value": 12, "objections": 13, "closing": 13},
             "verdict": "СРЕДНЕ",
             "strengths": "Вежлив, грамотно пишет",
-            "weaknesses": "Технические проблемы с оценкой",
+            "weaknesses": "Не удалось проанализировать",
             "red_flags": [],
             "question": "Расскажите о вашем опыте продаж"
         }
