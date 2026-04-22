@@ -10,11 +10,24 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not all([TOKEN, GEMINI_API_KEY, DATABASE_URL]):
     raise ValueError("Задай TELEGRAM_TOKEN, GEMINI_API_KEY, DATABASE_URL")
 
-# Для Render/Supabase (asyncpg)
+# Убираем параметры из URL если есть
+DATABASE_URL = DATABASE_URL.split("?")[0]
+
+# Для asyncpg
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-engine = create_async_engine(DATABASE_URL, poolclass=NullPool, echo=False)
+# SSL для Supabase через connect_args
+engine = create_async_engine(
+    DATABASE_URL, 
+    poolclass=NullPool,
+    echo=False,
+    connect_args={
+        "ssl": "require",  # Для asyncpg правильный формат
+        "server_settings": {"jit": "off"}  # Supabase оптимизация
+    }
+)
+
 Base = declarative_base()
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
